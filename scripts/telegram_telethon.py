@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""telegram-telethon CLI.
+
+Built on top of Telethon by Lonami Exo.
+Telethon is licensed under the MIT License:
+https://github.com/LonamiWebs/Telethon
+"""
+
 from __future__ import annotations
 
 import argparse
