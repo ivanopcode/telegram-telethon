@@ -1,0 +1,18 @@
+{
+  "locales": {
+    "en": {
+      "description": "Telegram: login, auth status, folders, dialogs, chat IDs, and chat history exports.",
+      "display_name": "telegram-telethon",
+      "short_description": "Telegram chats, dialogs, exports",
+      "default_prompt": "Use $telegram-telethon for Telegram workflows around login, auth status, folders, dialogs, chat IDs, and chat history exports.",
+      "local_prefix": "[local] "
+    },
+    "ru": {
+      "description": "Telegram: логин, проверка аутентификации, папки, диалоги, chat ID и экспорт истории чатов.",
+      "display_name": "telegram-telethon",
+      "short_description": "Telegram, диалоги, экспорт",
+      "default_prompt": "Используй $telegram-telethon для Telegram workflows вокруг логина, проверки аутентификации, папок, диалогов, chat ID и экспорта истории чатов.",
+      "local_prefix": "[локально] "
+    }
+  }
+}

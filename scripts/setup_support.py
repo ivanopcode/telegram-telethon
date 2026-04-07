@@ -1,0 +1,443 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+
+MANIFEST_FILENAME = ".skill-install.json"
+CATALOG_RELATIVE_PATH = Path("locales") / "metadata.json"
+SKILL_TRIGGERS_DIR = Path(".skill_triggers")
+SUPPORTED_BASE_LOCALES = ("en", "ru")
+SUPPORTED_LOCALE_MODES = ("en", "ru", "en-ru", "ru-en")
+TRIGGER_PREVIEW_LIMIT = 6
+REQUIRED_LOCALE_KEYS = (
+    "description",
+    "display_name",
+    "short_description",
+    "default_prompt",
+    "local_prefix",
+)
+OPENAI_YAML_FIELD_TEMPLATE = r"^(\s*{key}:\s*)(.*)$"
+FRONTMATTER_KEY_RE = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(.*)$")
+TRIGGER_MARKDOWN_ITEM_RE = re.compile(r"^\s*[-*+]\s+(?P<value>.+?)\s*$")
+CopyIgnore = shutil.ignore_patterns(
+    ".git",
+    ".venv",
+    "__pycache__",
+    ".DS_Store",
+    "*.pyc",
+    MANIFEST_FILENAME,
+)
+
+
+class SetupError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class LocaleSelection:
+    mode: str
+    primary_locale: str
+    secondary_locale: Optional[str]
+
+
+@dataclass(frozen=True)
+class InstallResult:
+    skill_name: str
+    source_dir: Path
+    runtime_dir: Path
+    install_root: Path
+    claude_link: Path
+    codex_link: Path
+    locale_mode: str
+
+
+def yaml_quote(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def unique_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    results: list[str] = []
+    for value in values:
+        cleaned = value.strip()
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(cleaned)
+    return results
+
+
+def strip_optional_quotes(value: str) -> str:
+    cleaned = value.strip()
+    if len(cleaned) >= 2 and (
+        cleaned.startswith('"') and cleaned.endswith('"')
+        or cleaned.startswith("'") and cleaned.endswith("'")
+    ):
+        return cleaned[1:-1].strip()
+    return cleaned
+
+
+def load_locale_triggers(skill_dir: Path, locale: str) -> list[str]:
+    trigger_path = skill_dir / SKILL_TRIGGERS_DIR / f"{locale}.md"
+    try:
+        lines = trigger_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError as exc:
+        raise SetupError(f"Missing trigger catalog: {trigger_path}") from exc
+
+    triggers: list[str] = []
+    in_code_block = False
+    for line in lines:
+        normalized = line.strip()
+        if normalized.startswith("```"):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            continue
+        match = TRIGGER_MARKDOWN_ITEM_RE.match(line)
+        if not match:
+            continue
+        trigger = strip_optional_quotes(match.group("value"))
+        if trigger:
+            triggers.append(trigger)
+    if not triggers:
+        raise SetupError(f"Trigger catalog has no trigger entries: {trigger_path}")
+    return unique_strings(triggers)
+
+
+def trigger_preview_label(locale: str) -> str:
+    if locale == "ru":
+        return "Триггеры:"
+    return "Triggers:"
+
+
+def build_description_with_trigger_preview(description: str, triggers: list[str], locale: str) -> str:
+    preview = triggers[:TRIGGER_PREVIEW_LIMIT]
+    if not preview:
+        return description
+    quoted_preview = ", ".join(yaml_quote(trigger) for trigger in preview)
+    return f"{description} {trigger_preview_label(locale)} {quoted_preview}."
+
+
+def parse_locale_mode(value: str) -> LocaleSelection:
+    normalized = value.strip().lower()
+    if normalized not in SUPPORTED_LOCALE_MODES:
+        supported = ", ".join(SUPPORTED_LOCALE_MODES)
+        raise SetupError(f"Unsupported locale mode: {value}. Supported values: {supported}")
+
+    if "-" in normalized:
+        primary_locale, secondary_locale = normalized.split("-", 1)
+        return LocaleSelection(
+            mode=normalized,
+            primary_locale=primary_locale,
+            secondary_locale=secondary_locale,
+        )
+
+    return LocaleSelection(mode=normalized, primary_locale=normalized, secondary_locale=None)
+
+
+def skill_data_home() -> Path:
+    xdg_data_home = os.environ.get("XDG_DATA_HOME", "").strip()
+    if xdg_data_home:
+        return Path(xdg_data_home)
+    return Path.home() / ".local" / "share"
+
+
+def managed_global_install_dir(skill_name: str) -> Path:
+    return skill_data_home() / "agents" / "skills" / skill_name
+
+
+def install_manifest_path(skill_dir: Path) -> Path:
+    return skill_dir / MANIFEST_FILENAME
+
+
+def load_install_manifest(skill_dir: Path) -> Optional[dict[str, Any]]:
+    path = install_manifest_path(skill_dir)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SetupError(f"Invalid install manifest: {path}") from exc
+    if not isinstance(payload, dict):
+        raise SetupError(f"Expected JSON object in install manifest: {path}")
+    return payload
+
+
+def write_install_manifest(
+    *,
+    skill_dir: Path,
+    skill_name: str,
+    locale_mode: str,
+    source_dir: Optional[Path],
+) -> None:
+    selection = parse_locale_mode(locale_mode)
+    payload = {
+        "schema_version": 2,
+        "skill_name": skill_name,
+        "install_mode": "global",
+        "locale_mode": selection.mode,
+        "primary_locale": selection.primary_locale,
+        "secondary_locale": selection.secondary_locale,
+    }
+    if source_dir is not None:
+        payload["source_dir"] = str(source_dir)
+    install_manifest_path(skill_dir).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def resolve_source_dir(current_skill_dir: Path) -> Path:
+    manifest = load_install_manifest(current_skill_dir)
+    if manifest:
+        candidate = manifest.get("source_dir")
+        if isinstance(candidate, str) and candidate.strip():
+            candidate_path = Path(candidate).expanduser()
+            if candidate_path.exists():
+                return candidate_path.resolve()
+    return current_skill_dir.resolve()
+
+
+def load_metadata_catalog(skill_dir: Path) -> dict[str, dict[str, Any]]:
+    path = skill_dir / CATALOG_RELATIVE_PATH
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise SetupError(f"Missing localization catalog: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise SetupError(f"Invalid localization catalog: {path}") from exc
+
+    locales = payload.get("locales")
+    if not isinstance(locales, dict):
+        raise SetupError(f"Localization catalog must contain a 'locales' object: {path}")
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for locale in SUPPORTED_BASE_LOCALES:
+        locale_payload = locales.get(locale)
+        if not isinstance(locale_payload, dict):
+            raise SetupError(f"Missing locale '{locale}' in localization catalog: {path}")
+        normalized_locale: dict[str, Any] = {}
+        for key in REQUIRED_LOCALE_KEYS:
+            value = locale_payload.get(key)
+            if not isinstance(value, str) or not value:
+                raise SetupError(f"Locale '{locale}' is missing string field '{key}' in {path}")
+            normalized_locale[key] = value
+        if "triggers" in locale_payload:
+            raise SetupError(
+                f"Locale '{locale}' must define triggers only in "
+                f"{skill_dir / SKILL_TRIGGERS_DIR / f'{locale}.md'}, not in {path}"
+            )
+        normalized_locale["triggers"] = load_locale_triggers(skill_dir, locale)
+        normalized[locale] = normalized_locale
+    return normalized
+
+
+def build_localized_metadata(skill_dir: Path, locale_mode: str) -> dict[str, Any]:
+    selection = parse_locale_mode(locale_mode)
+    catalog = load_metadata_catalog(skill_dir)
+    primary = catalog[selection.primary_locale]
+
+    description = build_description_with_trigger_preview(
+        primary["description"],
+        primary["triggers"],
+        selection.primary_locale,
+    )
+    triggers = list(primary["triggers"])
+    if selection.secondary_locale is not None:
+        secondary = catalog[selection.secondary_locale]
+        secondary_description = build_description_with_trigger_preview(
+            secondary["description"],
+            secondary["triggers"],
+            selection.secondary_locale,
+        )
+        description = f"{description} / {secondary_description}"
+        triggers = unique_strings([*triggers, *secondary["triggers"]])
+
+    return {
+        "description": description,
+        "display_name": primary["display_name"],
+        "short_description": primary["short_description"],
+        "default_prompt": primary["default_prompt"],
+        "triggers": triggers,
+    }
+
+
+def parse_frontmatter_sections(skill_text: str) -> tuple[list[tuple[str, str]], str]:
+    lines = skill_text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        raise SetupError("SKILL.md must start with a YAML frontmatter block.")
+
+    closing_index: int | None = None
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            closing_index = index
+            break
+    if closing_index is None:
+        raise SetupError("SKILL.md frontmatter is missing a closing --- line.")
+
+    frontmatter_lines = lines[1:closing_index]
+    body = "".join(lines[closing_index + 1 :])
+    sections: list[tuple[str, str]] = []
+    current_key: str | None = None
+    current_lines: list[str] = []
+
+    for line in frontmatter_lines:
+        match = FRONTMATTER_KEY_RE.match(line)
+        if match:
+            if current_key is not None:
+                sections.append((current_key, "".join(current_lines)))
+            current_key = match.group("key")
+            current_lines = [line]
+            continue
+        if current_key is None:
+            raise SetupError("SKILL.md frontmatter contains content before the first key.")
+        current_lines.append(line)
+
+    if current_key is not None:
+        sections.append((current_key, "".join(current_lines)))
+
+    return sections, body
+
+
+def render_triggers_block(triggers: list[str]) -> str:
+    lines = ["triggers:\n"]
+    for trigger in triggers:
+        lines.append(f"  - {yaml_quote(trigger)}\n")
+    return "".join(lines)
+
+
+def replace_frontmatter_sections(skill_text: str, replacements: dict[str, str]) -> str:
+    sections, body = parse_frontmatter_sections(skill_text)
+    index_by_key = {key: index for index, (key, _) in enumerate(sections)}
+
+    for key, rendered_value in replacements.items():
+        if key in index_by_key:
+            sections[index_by_key[key]] = (key, rendered_value)
+            continue
+
+        insert_at = len(sections)
+        if key == "triggers" and "description" in index_by_key:
+            insert_at = index_by_key["description"] + 1
+        sections.insert(insert_at, (key, rendered_value))
+        index_by_key = {section_key: index for index, (section_key, _) in enumerate(sections)}
+
+    frontmatter = "".join(section for _, section in sections)
+    return f"---\n{frontmatter}---\n{body}"
+
+
+def render_skill_metadata(skill_dir: Path, locale_mode: str) -> None:
+    metadata = build_localized_metadata(skill_dir, locale_mode)
+
+    skill_md_path = skill_dir / "SKILL.md"
+    skill_text = skill_md_path.read_text(encoding="utf-8")
+    skill_text = replace_frontmatter_sections(
+        skill_text,
+        {
+            "description": f"description: {yaml_quote(metadata['description'])}\n",
+            "triggers": render_triggers_block(metadata["triggers"]),
+        },
+    )
+    skill_md_path.write_text(skill_text, encoding="utf-8")
+
+    openai_yaml_path = skill_dir / "agents" / "openai.yaml"
+    yaml_text = openai_yaml_path.read_text(encoding="utf-8")
+    for key in ("display_name", "short_description", "default_prompt"):
+        pattern = re.compile(OPENAI_YAML_FIELD_TEMPLATE.format(key=key), flags=re.MULTILINE)
+        yaml_text, count = pattern.subn(
+            lambda match, value=metadata[key]: f"{match.group(1)}{yaml_quote(value)}",
+            yaml_text,
+            count=1,
+        )
+        if count != 1:
+            raise SetupError(f"Could not update {key} in {openai_yaml_path}")
+    openai_yaml_path.write_text(yaml_text, encoding="utf-8")
+
+
+def sync_skill_copy(source_dir: Path, dest_dir: Path) -> None:
+    if dest_dir.is_symlink() or dest_dir.is_file():
+        dest_dir.unlink()
+    elif dest_dir.exists():
+        shutil.rmtree(dest_dir, ignore_errors=False)
+    dest_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_dir, dest_dir, ignore=CopyIgnore)
+
+
+def ensure_skill_link(link_value: str, target_path: Path) -> None:
+    if target_path.is_symlink() or target_path.is_file():
+        target_path.unlink()
+    elif target_path.exists():
+        raise SetupError(f"Refusing to replace existing directory: {target_path}")
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(link_value, target_path)
+
+
+def run_bootstrap(skill_dir: Path) -> None:
+    bootstrap_path = skill_dir / "scripts" / "bootstrap.sh"
+    if not bootstrap_path.exists():
+        return
+    subprocess.run([str(bootstrap_path), "--quiet"], check=True)
+
+
+def resolve_locale_mode(runtime_dir: Path, requested_locale: Optional[str]) -> str:
+    manifest = load_install_manifest(runtime_dir)
+    existing_locale = manifest.get("locale_mode") if manifest else None
+    if existing_locale is not None and not isinstance(existing_locale, str):
+        raise SetupError(f"Invalid locale_mode in install manifest: {install_manifest_path(runtime_dir)}")
+
+    if requested_locale:
+        return parse_locale_mode(requested_locale).mode
+    if existing_locale:
+        return parse_locale_mode(existing_locale).mode
+
+    supported = ", ".join(SUPPORTED_LOCALE_MODES)
+    raise SetupError(f"First global install requires --locale <{supported}>.")
+
+
+def perform_install(
+    *,
+    source_dir: Path,
+    requested_locale: Optional[str],
+    bootstrap_runner: Callable[[Path], None] = run_bootstrap,
+) -> InstallResult:
+    source_dir = resolve_source_dir(source_dir).resolve()
+    skill_name = source_dir.name
+    install_root = Path.home()
+    runtime_dir = managed_global_install_dir(skill_name)
+    locale_mode = resolve_locale_mode(runtime_dir, requested_locale)
+
+    sync_skill_copy(source_dir, runtime_dir)
+    render_skill_metadata(runtime_dir, locale_mode)
+    write_install_manifest(
+        skill_dir=runtime_dir,
+        skill_name=skill_name,
+        locale_mode=locale_mode,
+        source_dir=source_dir,
+    )
+    bootstrap_runner(runtime_dir)
+
+    claude_link = install_root / ".claude" / "skills" / skill_name
+    codex_link = install_root / ".codex" / "skills" / skill_name
+    ensure_skill_link(str(runtime_dir), claude_link)
+    ensure_skill_link(str(runtime_dir), codex_link)
+
+    return InstallResult(
+        skill_name=skill_name,
+        source_dir=source_dir,
+        runtime_dir=runtime_dir,
+        install_root=install_root,
+        claude_link=claude_link,
+        codex_link=codex_link,
+        locale_mode=locale_mode,
+    )

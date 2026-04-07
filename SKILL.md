@@ -1,19 +1,17 @@
 ---
 name: telegram-telethon
-description: Access Telegram user chats through Python + Telethon with macOS Keychain-backed auth. Use when you need a local Telegram CLI to bootstrap one-time login, list chat folders and dialogs, find dialog IDs, or export 1:1/group chat history to NDJSON/JSON since a date or over the full accessible history.
+description: Telegram: login, auth status, folders, dialogs, chat IDs, and chat history exports.
 triggers:
-  - telethon
   - telegram export
-  - telegram chat export
   - telegram history export
   - telegram dialog list
   - telegram folder list
+  - telegram auth status
+  - telegram login
   - telegram keychain auth
-  - выгрузка телеграм
-  - экспорт телеграм
-  - история телеграм чата
-  - список чатов телеграм
-  - папки телеграм
+  - telegram dialog id
+  - telegram chat export
+  - telethon
 ---
 
 # Telegram Telethon
@@ -34,7 +32,7 @@ Use this skill for local Telegram read/export workflows on macOS when Telegram u
 
 ```bash
 cd ~/agents/skills/telegram-telethon
-./setup.sh
+make install LOCALE=en
 ```
 
 Open a separate shell and authenticate once:
@@ -70,7 +68,7 @@ tg-telethon export messages --chat -1001234567890 --since 2026-03-01 --output ch
 Bootstrap and auth:
 
 ```bash
-./setup.sh
+make install LOCALE=en
 scripts/auth-login.sh
 scripts/auth-login.sh --profile work
 scripts/auth-logout.sh --profile work
@@ -117,7 +115,7 @@ tg-telethon export messages --chat @channelusername --since 2026-03-01T09:00:00+
 
 ## Agent Workflow
 
-1. Ensure the skill has been bootstrapped with `./setup.sh`.
+1. Ensure the skill has been installed with `make install` or bootstrapped in place with `scripts/bootstrap.sh`.
 2. If auth is missing, instruct the user to run `scripts/auth-login.sh` in a separate shell.
 3. Resolve the profile context first:
    - use `tg-telethon profiles current` to inspect the pinned active profile

@@ -1,0 +1,4 @@
+interface:
+  display_name: "telegram-telethon"
+  short_description: "Telegram chats, dialogs, exports"
+  default_prompt: "Use $telegram-telethon for Telegram workflows around login, auth status, folders, dialogs, chat IDs, and chat history exports."

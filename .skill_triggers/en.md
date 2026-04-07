@@ -1,0 +1,10 @@
+- telegram export
+- telegram history export
+- telegram dialog list
+- telegram folder list
+- telegram auth status
+- telegram login
+- telegram keychain auth
+- telegram dialog id
+- telegram chat export
+- telethon

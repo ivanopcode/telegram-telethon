@@ -7,6 +7,7 @@ The repository contains two layers:
 
 - an agent-facing skill in `SKILL.md`
 - a local CLI that the skill uses for deterministic Telegram operations
+- a managed install layer that renders localized metadata and publishes the runtime
 
 ## What It Can Do
 
@@ -27,22 +28,24 @@ The repository contains two layers:
 - a Telegram user account
 - a Telegram `api_id` and `api_hash` from `https://my.telegram.org/apps`
 
-## Bootstrap
+## Install
 
-Clone the repository and run setup:
+Install or update the managed copy:
 
 ```bash
-git clone git@github.com:ivanopcode/telegram-telethon.git
-cd telegram-telethon
-./setup.sh
+make install LOCALE=ru-en
 ```
 
-`setup.sh` does the following:
+This does the following:
 
+- creates or refreshes the managed runtime copy under `${XDG_DATA_HOME:-~/.local/share}/agents/skills/telegram-telethon`
+- renders localized metadata and trigger previews from `.skill_triggers`
 - creates `.venv/`
 - installs Python dependencies from `requirements.txt`
 - installs local wrapper commands into `~/.local/bin`
 - links the skill into `~/.claude/skills/` and `~/.codex/skills/`
+
+For backward compatibility, `./setup.sh` still works and defaults to `--locale en` on first install.
 
 Installed wrapper commands:
 
@@ -246,8 +249,10 @@ This is the agent-facing contract.
 
 ### 2. Bootstrap Layer
 
-`setup.sh` is the only supported bootstrap entrypoint.
-It creates the Python environment, installs dependencies, and publishes wrapper commands into the user environment.
+`make install` is the canonical install entrypoint.
+It creates or refreshes the managed runtime copy, bootstraps `.venv`, publishes wrapper commands into the user environment, and refreshes the skill symlinks.
+
+`setup.sh` remains as a backward-compatible wrapper.
 
 ### 3. CLI Layer
 
@@ -290,15 +295,23 @@ This repository is released under the MIT License. See `LICENSE`.
 
 ```text
 telegram-telethon/
+├── .skill_triggers/
+├── agents/
+├── locales/
 ├── README.md
 ├── SKILL.md
+├── Makefile
 ├── requirements.txt
 ├── setup.sh
-└── scripts/
+├── scripts/
     ├── auth-login.sh
     ├── auth-logout.sh
+    ├── bootstrap.sh
+    ├── setup_main.py
+    ├── setup_support.py
     ├── tg-telethon
     └── telegram_telethon.py
+└── tests/
 ```
 
 ## Notes
@@ -313,14 +326,15 @@ telegram-telethon/
 Syntax checks:
 
 ```bash
+bash -n scripts/bootstrap.sh
 bash -n setup.sh
 bash -n scripts/auth-login.sh
 bash -n scripts/auth-logout.sh
 python3 -m py_compile scripts/telegram_telethon.py
 ```
 
-Re-run setup after changing wrappers or dependencies:
+Re-run install after changing wrappers or dependencies:
 
 ```bash
-./setup.sh
+make install LOCALE=en
 ```
