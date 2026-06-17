@@ -11,6 +11,8 @@ triggers:
   - telegram keychain auth
   - telegram dialog id
   - telegram chat export
+  - telegram stories analytics
+  - telegram story viewers
   - telethon
 ---
 
@@ -62,6 +64,23 @@ tg-telethon export messages --chat -1001234567890 --since 2026-03-01 --output ch
 - List all dialogs, or only dialogs matching a specific folder filter.
 - Find a stable dialog ID before export.
 - Export 1:1 or group chat history since a specific date or over the full accessible history.
+
+## Companion Tools
+
+Use `tg-stories` from the `telegram-stories-analytics` package when the user
+asks for Telegram Stories exports, story viewer lists, story links, regular
+viewer analytics, reaction rankings, or an HTML analytics report.
+
+`tg-stories` can reuse this skill's macOS Keychain credentials:
+
+```bash
+tg-stories auth status --profile work --auth-source telegram-telethon
+tg-stories export --profile work --auth-source telegram-telethon --progress --open
+```
+
+Prefer the companion tool for Stories work instead of ad-hoc raw Telethon
+snippets. It performs archive pagination, full viewer pagination, analytics
+generation, and local HTML report rendering.
 
 ## Commands
 
@@ -124,3 +143,6 @@ tg-telethon export messages --chat @channelusername --since 2026-03-01T09:00:00+
 4. Use `tg-telethon folders list` and `tg-telethon chats list` to find the target peer ID.
 5. Export with `tg-telethon export messages`, usually to `ndjson`.
 6. If the user needs richer downstream analysis, rerun export with `--schema full`.
+7. If the user asks about Telegram Stories or story viewers, switch to
+   `tg-stories` and pass `--auth-source telegram-telethon` on macOS to reuse
+   the active profile credentials from this skill.

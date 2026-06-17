@@ -20,6 +20,11 @@ The repository contains two layers:
 - manage multiple account labels through profile commands
 - pin an active profile or override it per shell or per agent run
 
+For Telegram Stories exports and analytics, use the companion
+`telegram-stories-analytics` CLI (`tg-stories`). It can reuse this skill's
+macOS Keychain credentials and produces full story/viewer exports plus JSON,
+Markdown, and HTML analytics reports.
+
 ## Requirements
 
 - macOS
@@ -171,6 +176,33 @@ Export schemas:
 
 - `--schema minimal`: compact normalized fields
 - `--schema full`: includes a normalized raw Telethon payload
+
+## Stories Analytics Companion
+
+Stories analytics is intentionally handled by a separate CLI so this skill can
+stay focused on account auth, dialog discovery, and chat history export.
+
+Install the companion tool:
+
+```bash
+pipx install telegram-stories-analytics
+```
+
+Reuse an existing `telegram-telethon` profile on macOS:
+
+```bash
+tg-stories auth status --profile work --auth-source telegram-telethon
+tg-stories export --profile work --auth-source telegram-telethon --progress --open
+```
+
+The companion export includes:
+
+- all own Telegram Stories from the archive;
+- story links when Telegram returns them;
+- story metadata and media metadata;
+- full paginated viewer lists with reactions;
+- regular-viewer analytics, recent windows, speed metrics, churn, reaction
+  rankings, segments, Markdown, and standalone HTML reports.
 
 ## Agent Environment Examples
 
